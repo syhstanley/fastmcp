@@ -84,6 +84,13 @@ class StdioTransport(ClientTransport):
     async def connect(
         self, **session_kwargs: Unpack[SessionKwargs]
     ) -> ClientSession | None:
+        # If the connect task completed or the session's streams are dead,
+        # the subprocess has exited. Tear down so we can start fresh.
+        if self._connect_task is not None and (
+            self._connect_task.done() or self._is_session_dead()
+        ):
+            await self.disconnect()
+
         if self._connect_task is not None:
             return
 
@@ -125,12 +132,23 @@ class StdioTransport(ClientTransport):
         self._stop_event.set()
 
         # wait for the connection task to finish cleanly
-        await self._connect_task
+        with contextlib.suppress(Exception):
+            await self._connect_task
 
         # reset variables and events for potential future reconnects
         self._connect_task = None
+        self._session = None
         self._stop_event = anyio.Event()
         self._ready_event = anyio.Event()
+
+    def _is_session_dead(self) -> bool:
+        """Check if the session's underlying streams have been closed."""
+        if self._session is None:
+            return False
+        try:
+            return self._session._write_stream.statistics().open_send_streams == 0
+        except AttributeError:
+            return False
 
     async def close(self):
         await self.disconnect()
