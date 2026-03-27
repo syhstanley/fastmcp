@@ -14,7 +14,12 @@ import mcp.types
 from mcp.shared.exceptions import McpError
 from mcp.types import INTERNAL_ERROR, ErrorData
 
-from fastmcp.server.dependencies import _current_docket, get_access_token, get_context
+from fastmcp.server.dependencies import (
+    _current_docket,
+    get_access_token,
+    get_context,
+    register_task_server,
+)
 from fastmcp.server.tasks.config import TaskMeta
 from fastmcp.server.tasks.keys import build_task_key
 from fastmcp.utilities.logging import get_logger
@@ -70,6 +75,9 @@ async def submit_to_docket(
         session_id = ctx.session_id
     except RuntimeError:
         session_id = "internal"
+
+    # Register owning server so background workers resolve CurrentFastMCP() correctly (#3571)
+    register_task_server(server_task_id, ctx.fastmcp)
 
     docket = _current_docket.get()
     if docket is None:

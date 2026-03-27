@@ -174,6 +174,26 @@ def get_task_session(session_id: str) -> ServerSession | None:
 _current_server: ContextVar[weakref.ref[FastMCP] | None] = ContextVar(
     "server", default=None
 )
+
+# --- Background task server map ---
+
+
+_task_server_map: dict[str, weakref.ref[Any]] = {}
+
+
+def register_task_server(task_id: str, server: Any) -> None:
+    """Register the owning server for a background task.
+
+    Called at task-submission time so that background workers can resolve
+    CurrentFastMCP() / ctx.fastmcp to the child server for mounted tasks (#3571).
+
+    Args:
+        task_id: The server-generated task UUID
+        server: The FastMCP server that owns the component being executed
+    """
+    _task_server_map[task_id] = weakref.ref(server)
+
+
 _current_docket: ContextVar[Docket | None] = ContextVar("docket", default=None)
 _current_worker: ContextVar[Worker | None] = ContextVar("worker", default=None)
 _task_access_token: ContextVar[AccessToken | None] = ContextVar(
@@ -825,8 +845,13 @@ class _CurrentContext(Dependency["Context"]):
         if task_info is not None:
             # Get session from registry (registered when task was submitted)
             session = get_task_session(task_info.session_id)
-            # Get server from ContextVar
-            server = get_server()
+            # Prefer task-specific server (resolves child server for mounted tasks, #3571)
+            task_server_ref = _task_server_map.get(task_info.task_id)
+            if task_server_ref is not None:
+                task_server = task_server_ref()
+                server = task_server if task_server is not None else get_server()
+            else:
+                server = get_server()
             origin_request_id = await _restore_task_origin_request_id(
                 task_info.session_id, task_info.task_id
             )
@@ -1037,6 +1062,14 @@ class _CurrentFastMCP(Dependency["FastMCP"]):
     """Async context manager for FastMCP server dependency."""
 
     async def __aenter__(self) -> FastMCP:
+        # Prefer task-specific server (resolves child server for mounted tasks, #3571)
+        task_info = get_task_context()
+        if task_info is not None:
+            task_server_ref = _task_server_map.get(task_info.task_id)
+            if task_server_ref is not None:
+                task_server = task_server_ref()
+                if task_server is not None:
+                    return task_server
         server_ref = _current_server.get()
         if server_ref is None:
             raise RuntimeError("No FastMCP server instance in context")

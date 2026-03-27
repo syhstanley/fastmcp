@@ -342,6 +342,56 @@ class TestMountedTaskDependencies:
             assert received_server[0] is not None
 
 
+class TestMountedTaskServerContext:
+    """Test that background tasks on mounted servers bind to the child server (issue #3571)."""
+
+    async def test_current_fastmcp_resolves_to_child_server(self):
+        """CurrentFastMCP() inside a mounted background task returns the child server."""
+        child = FastMCP("child")
+        received_server = []
+
+        @child.tool(task=True)
+        async def whoami(server: CurrentFastMCP = CurrentFastMCP()) -> str:  # type: ignore[invalid-type-form]  # ty:ignore[invalid-type-form]
+            received_server.append(server)
+            return f"server name: {server.name}"
+
+        parent = FastMCP("parent")
+        parent.mount(child, namespace="child")
+
+        async with Client(parent) as client:
+            task = await client.call_tool("child_whoami", {}, task=True)
+            result = await task.result()
+
+        assert len(received_server) == 1
+        # Should resolve to the child server, not the parent
+        assert received_server[0].name == "child"
+        assert "server name: child" in str(result)
+
+    async def test_context_fastmcp_resolves_to_child_server(self):
+        """ctx.fastmcp inside a mounted background task returns the child server."""
+        from fastmcp import Context
+
+        child = FastMCP("child")
+        received_server = []
+
+        @child.tool(task=True)
+        async def whoami_ctx(ctx: Context) -> str:
+            received_server.append(ctx.fastmcp)
+            return f"context server: {ctx.fastmcp.name}"
+
+        parent = FastMCP("parent")
+        parent.mount(child, namespace="child")
+
+        async with Client(parent) as client:
+            task = await client.call_tool("child_whoami_ctx", {}, task=True)
+            result = await task.result()
+
+        assert len(received_server) == 1
+        # Should resolve to the child server, not the parent
+        assert received_server[0].name == "child"
+        assert "context server: child" in str(result)
+
+
 class TestMultipleMounts:
     """Test tasks with multiple mounted servers."""
 
